@@ -5,8 +5,8 @@ from langchain_community.vectorstores import FAISS
 from langchain_core.prompts import ChatPromptTemplate
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain.chains import create_retrieval_chain
-from langchain_groq import ChatGroq
 from langchain.embeddings import HuggingFaceEmbeddings
+import boto3
 
 # App Title
 st.title("Knowledge Management Chatbot")
@@ -31,9 +31,8 @@ if uploaded_file is not None:
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=15)
     documents = text_splitter.split_documents(docs)
 
-    # Initialize embeddings and LLM
+    # Initialize embeddings
     hf_embedding = HuggingFaceEmbeddings(model_name="sentence-transformers/all-mpnet-base-v2")
-    llm = ChatGroq(groq_api_key="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", model_name='llama3-70b-8192', temperature=0, top_p=0.2)
 
     # Vector database storage
     vector_db = FAISS.from_documents(documents, hf_embedding)
@@ -56,14 +55,26 @@ if uploaded_file is not None:
     Question: {input}
     """)
 
-    # Stuff Document Chain Creation
-    document_chain = create_stuff_documents_chain(llm, prompt)
+    # Initialize Bedrock client
+    client = boto3.client(
+        'bedrock',
+        aws_access_key_id='YOUR_ACCESS_KEY',
+        aws_secret_access_key='YOUR_SECRET_KEY',
+        region_name='YOUR_REGION'  # Set the correct region
+    )
+
+    # Define a function to interact with Bedrock LLM
+    def invoke_bedrock_model(user_input, chat_history):
+        # Request for LLM model
+        response = client.invoke_model(
+            modelId='bedrock-model-id',  # Replace with your Bedrock model ID
+            prompt=prompt.format(context=user_input, chat_history=chat_history),
+            maxTokens=100  # Adjust as needed
+        )
+        return response['completions'][0]['text']
 
     # Retriever from vector store
     retriever = vector_db.as_retriever()
-
-    # Create a retrieval chain
-    retrieval_chain = create_retrieval_chain(retriever, document_chain)
 
     # Chat interface
     user_question = st.text_input("Ask a question about the relevant document", key="input")
@@ -74,14 +85,11 @@ if uploaded_file is not None:
         for chat in st.session_state['chat_history']:
             conversation_history += f"You: {chat['user']}\nBot: {chat['bot']}\n"
 
-        # Get response from the retrieval chain with context
-        response = retrieval_chain.invoke({
-            "input": user_question,
-            "chat_history": conversation_history
-        })
+        # Get response from Bedrock LLM with context
+        bedrock_response = invoke_bedrock_model(user_question, conversation_history)
 
         # Add the user's question and the model's response to chat history
-        st.session_state.chat_history.append({"user": user_question, "bot": response['answer']})
+        st.session_state.chat_history.append({"user": user_question, "bot": bedrock_response})
 
     # Display chat history with a conversational format
     if st.session_state['chat_history']:
